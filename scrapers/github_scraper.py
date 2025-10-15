@@ -4,6 +4,7 @@ Fetches repository stats, contributions, and activity from GitHub API
 """
 
 import requests
+import os # Import the 'os' module to access environment variables
 
 
 def get_github_data(username: str) -> dict:
@@ -31,11 +32,22 @@ def get_github_data(username: str) -> dict:
         - Languages (10%): (languages / 10) * 10
     """
     
+    # --- CHANGE: Create headers to send the API token ---
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+    }
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
     try:
-        # Fetch user profile data
-        user_response = requests.get(f"https://api.github.com/users/{username}")
-        if user_response.status_code != 200:
-            raise ValueError(f"GitHub user '{username}' not found")
+        # We now check the status code directly and give a more precise error.
+        # --- CHANGE: Pass the headers with the request ---
+        user_response = requests.get(f"https://api.github.com/users/{username}", headers=headers)
+        
+        if user_response.status_code == 404:
+            raise ValueError(f"GitHub user '{username}' not found. Please check for typos and correct capitalization.")
+        user_response.raise_for_status() # Raises an error for other bad responses (500, 403, etc.)
         
         user_data = user_response.json()
         public_repos = user_data.get("public_repos", 0)
@@ -47,21 +59,25 @@ def get_github_data(username: str) -> dict:
         )
         commits_last_year = 0
         if contrib_response.status_code == 200:
-            commits_last_year = contrib_response.json().get("total", {}).get("lastYear", 0)
+            contrib_data = contrib_response.json().get("total", {})
+            if contrib_data:
+                commits_last_year = contrib_data.get("lastYear", 0)
         
         # Fetch repositories for stars and language diversity
+        # --- CHANGE: Pass the headers with the request ---
         repos_response = requests.get(
-            f"https://api.github.com/users/{username}/repos?per_page=100"
+            f"https://api.github.com/users/{username}/repos?per_page=100", headers=headers
         )
+        repos_response.raise_for_status()
+        
         total_stars = 0
         unique_languages = set()
         
-        if repos_response.status_code == 200:
-            for repo in repos_response.json():
-                total_stars += repo.get("stargazers_count", 0)
-                language = repo.get("language")
-                if language:
-                    unique_languages.add(language)
+        for repo in repos_response.json():
+            total_stars += repo.get("stargazers_count", 0)
+            language = repo.get("language")
+            if language:
+                unique_languages.add(language)
         
         language_diversity = len(unique_languages)
         
@@ -88,8 +104,6 @@ def get_github_data(username: str) -> dict:
         follower_score = (capped_followers / max_values["followers"]) * 15
         language_score = (capped_languages / max_values["languages"]) * 10
         
-        # --- CHANGE ---
-        # The final score is now rounded to the nearest whole number (integer).
         github_score = round(
             repo_score + commit_score + star_score + follower_score + language_score
         )
@@ -104,6 +118,10 @@ def get_github_data(username: str) -> dict:
         }
         
     except requests.RequestException as e:
-        raise ValueError(f"Error fetching GitHub data: {str(e)}")
+        raise ValueError(f"Network error when fetching GitHub data: {str(e)}")
+    except ValueError as e: # Catch our specific "not found" error
+        raise e
     except Exception as e:
-        raise ValueError(f"Error processing GitHub data: {str(e)}")
+        # This will now catch other unexpected errors during processing
+        raise ValueError(f"An unexpected error occurred while processing GitHub data: {str(e)}")
+
