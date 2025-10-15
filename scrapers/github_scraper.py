@@ -38,7 +38,13 @@ def get_github_data(username: str) -> dict:
     }
     github_token = os.environ.get("GITHUB_TOKEN")
     if github_token:
+        # --- NEW: Add a log to confirm the token is being used ---
+        print("✅ GITHUB_TOKEN found. Using authenticated requests.")
         headers["Authorization"] = f"token {github_token}"
+    else:
+        # --- NEW: Add a warning if the token is NOT found ---
+        print("⚠️ WARNING: GITHUB_TOKEN not found. Making unauthenticated requests (rate limit will be low).")
+
 
     try:
         # We now check the status code directly and give a more precise error.
@@ -47,7 +53,13 @@ def get_github_data(username: str) -> dict:
         
         if user_response.status_code == 404:
             raise ValueError(f"GitHub user '{username}' not found. Please check for typos and correct capitalization.")
-        user_response.raise_for_status() # Raises an error for other bad responses (500, 403, etc.)
+        # --- NEW: Add a specific check for rate limit errors ---
+        if user_response.status_code == 403:
+             # The 'X-RateLimit-Reset' header tells you when the limit will reset (as a Unix timestamp)
+            reset_time = user_response.headers.get('X-RateLimit-Reset')
+            raise ValueError(f"GitHub API rate limit exceeded. Please wait and try again later. Limit resets at timestamp: {reset_time}")
+
+        user_response.raise_for_status() # Raises an error for other bad responses (500, etc.)
         
         user_data = user_response.json()
         public_repos = user_data.get("public_repos", 0)
@@ -119,7 +131,7 @@ def get_github_data(username: str) -> dict:
         
     except requests.RequestException as e:
         raise ValueError(f"Network error when fetching GitHub data: {str(e)}")
-    except ValueError as e: # Catch our specific "not found" error
+    except ValueError as e: # Catch our specific "not found" or "rate limit" errors
         raise e
     except Exception as e:
         # This will now catch other unexpected errors during processing
